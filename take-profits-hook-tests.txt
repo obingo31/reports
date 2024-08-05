@@ -1,0 +1,203 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+import "forge-std/Test.sol";
+import "../src/EnhancedTakeProfitsHook.sol";
+import {IPoolManager} from "@uniswap/v4-core/contracts/interfaces/IPoolManager.sol";
+import {PoolKey} from "@uniswap/v4-core/contracts/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/contracts/types/Currency.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/contracts/types/PoolId.sol";
+
+contract EnhancedTakeProfitsHookTest is Test {
+    using PoolIdLibrary for PoolKey;
+
+    EnhancedTakeProfitsHook hook;
+    IPoolManager poolManager;
+    PoolKey poolKey;
+    address token0;
+    address token1;
+
+    function setUp() public {
+        // Deploy a mock PoolManager
+        poolManager = IPoolManager(address(new MockPoolManager()));
+
+        // Deploy the EnhancedTakeProfitsHook
+        hook = new EnhancedTakeProfitsHook(poolManager, "https://example.com/");
+
+        // Setup token addresses
+        token0 = address(new MockERC20("Token0", "TKN0"));
+        token1 = address(new MockERC20("Token1", "TKN1"));
+
+        // Setup PoolKey
+        poolKey = PoolKey({
+            currency0: Currency.wrap(token0),
+            currency1: Currency.wrap(token1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(hook))
+        });
+    }
+
+    function testPlaceOrder() public {
+        uint256 amountIn = 1000;
+        int24 tick = 100;
+        bool zeroForOne = true;
+        uint256[] memory levels = new uint256[](2);
+        levels[0] = 5; // 5% above entry
+        levels[1] = 10; // 10% above entry
+        uint256[] memory portions = new uint256[](2);
+        portions[0] = 50; // 50% of amount
+        portions[1] = 50; // 50% of amount
+        EnhancedTakeProfitsHook.Condition[] memory conditions = new EnhancedTakeProfitsHook.Condition[](0);
+
+        // Approve tokens
+        MockERC20(token0).approve(address(hook), amountIn);
+
+        // Place order
+        uint256 orderId = hook.placeOrder(poolKey, tick, amountIn, zeroForOne, levels, portions, conditions);
+
+        // Check order details
+        (uint256 orderAmount, uint256[] memory orderLevels, uint256[] memory orderPortions) = hook.takeProfitOrders(poolKey.toId(), hook._getTickLower(tick, poolKey.tickSpacing), zeroForOne);
+        assertEq(orderAmount, amountIn, "Incorrect order amount");
+        assertEq(orderLevels.length, 2, "Incorrect number of levels");
+        assertEq(orderLevels[0], 5, "Incorrect first level");
+        assertEq(orderLevels[1], 10, "Incorrect second level");
+        assertEq(orderPortions[0], 50, "Incorrect first portion");
+        assertEq(orderPortions[1], 50, "Incorrect second portion");
+
+        // Check AI suggestion
+        uint256 aiConfidence = hook.aiSuggestions(orderId);
+        assertTrue(aiConfidence <= 100, "AI confidence should be between 0 and 100");
+    }
+
+    function testConditionalOrder() public {
+        uint256 amountIn = 1000;
+        int24 tick = 100;
+        bool zeroForOne = true;
+        uint256[] memory levels = new uint256[](1);
+        levels[0] = 5;
+        uint256[] memory portions = new uint256[](1);
+        portions[0] = 100;
+
+        // Create a condition
+        EnhancedTakeProfitsHook.Condition[] memory conditions = new EnhancedTakeProfitsHook.Condition[](1);
+        conditions[0] = EnhancedTakeProfitsHook.Condition({
+            poolKey: poolKey,
+            targetTick: 200,
+            greaterThan: true
+        });
+
+        // Approve tokens
+        MockERC20(token0).approve(address(hook), amountIn);
+
+        // Place order
+        uint256 orderId = hook.placeOrder(poolKey, tick, amountIn, zeroForOne, levels, portions, conditions);
+
+        // Check conditions
+        EnhancedTakeProfitsHook.Condition memory storedCondition = hook.orderConditions(orderId, 0);
+        assertEq(abi.encode(storedCondition), abi.encode(conditions[0]), "Stored condition does not match");
+    }
+
+    function testFillOrder() public {
+        // Place an order
+        uint256 amountIn = 1000;
+        int24 tick = 100;
+        bool zeroForOne = true;
+        uint256[] memory levels = new uint256[](1);
+        levels[0] = 5;
+        uint256[] memory portions = new uint256[](1);
+        portions[0] = 100;
+        EnhancedTakeProfitsHook.Condition[] memory conditions = new EnhancedTakeProfitsHook.Condition[](0);
+
+        MockERC20(token0).approve(address(hook), amountIn);
+        hook.placeOrder(poolKey, tick, amountIn, zeroForOne, levels, portions, conditions);
+
+        // Simulate a price change
+        MockPoolManager(address(poolManager)).setCurrentTick(tick + 100);
+
+        // Try to fill the order
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: !zeroForOne,
+            amountSpecified: 0,
+            sqrtPriceLimitX96: 0
+        });
+
+        (bool filled,) = hook.exposed_tryFulfillingOrders(poolKey, params);
+        assertTrue(filled, "Order should have been filled");
+    }
+
+    function testMultipleTakeProfitLevels() public {
+        uint256 amountIn = 1000;
+        int24 tick = 100;
+        bool zeroForOne = true;
+        uint256[] memory levels = new uint256[](2);
+        levels[0] = 5;
+        levels[1] = 10;
+        uint256[] memory portions = new uint256[](2);
+        portions[0] = 50;
+        portions[1] = 50;
+        EnhancedTakeProfitsHook.Condition[] memory conditions = new EnhancedTakeProfitsHook.Condition[](0);
+
+        MockERC20(token0).approve(address(hook), amountIn);
+        hook.placeOrder(poolKey, tick, amountIn, zeroForOne, levels, portions, conditions);
+
+        // Simulate a 7% price increase (between the two levels)
+        MockPoolManager(address(poolManager)).setCurrentTick(tick + 42); // Assuming 1 tick ≈ 0.01% price change
+
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: !zeroForOne,
+            amountSpecified: 0,
+            sqrtPriceLimitX96: 0
+        });
+
+        (bool filled,) = hook.exposed_tryFulfillingOrders(poolKey, params);
+        assertTrue(filled, "First level should have been filled");
+
+        // Check that only half the order was filled
+        (uint256 remainingAmount,,) = hook.takeProfitOrders(poolKey.toId(), hook._getTickLower(tick, poolKey.tickSpacing), zeroForOne);
+        assertEq(remainingAmount, amountIn / 2, "Half of the order should remain");
+    }
+}
+
+// Mock contracts for testing
+contract MockPoolManager is IPoolManager {
+    int24 currentTick;
+
+    function setCurrentTick(int24 _tick) external {
+        currentTick = _tick;
+    }
+
+    function getSlot0(PoolId) external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
+        return (0, currentTick, 0, 0, 0, 0, false);
+    }
+
+    // Implement other required functions...
+}
+
+contract MockERC20 {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    constructor(string memory, string memory) {
+        balanceOf[msg.sender] = 1000000 * 10**18;
+    }
+
+    function approve(address spender, uint256 amount) public returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) public returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public returns (bool) {
+        require(allowance[from][msg.sender] >= amount, "Insufficient allowance");
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
