@@ -10,6 +10,8 @@
 
 #### Formal Verification [Uniswap Labs/uniswap-v4](https://github.com/obingo31/UniswapV4-Formal-Verification-Contest)
 
+#### Hats [Hats](https://github.com/hats-finance/Intuition-0x538dbadc50cc87b281cd655f1edbc6ebda02a66a/issues/88#issuecomment-2211307912)
+
 #### Book a meeting:
 [Calendly](https://calendly.com/obingo76/30min)
 
