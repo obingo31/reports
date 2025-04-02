@@ -1,0 +1,54 @@
+0bingo76
+Summary
+
+The AssetSwapPathStorage contract does not fully comply with ERC-7201 due to an incorrect storage namespace calculation. This issue could lead to unintended storage collisions and data corruption across multiple contracts.
+
+Vulnerability Details
+The contract defines its storage layout using incomplete ERC-7201 Implementation:
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.25;
+
+library AssetSwapPath {
+    /// @notice ERC7201 storage location.
+    bytes32 internal constant ASSET_SWAP_STRATEGY_LOCATION =
+        keccak256(abi.encode(uint256(keccak256("fi.zaros.market-making.AssetSwapPath")) - 1));
+```
+It's missing the & ~bytes32(uint256(0xff)) mask that is crucial for the ERC-7201 namespace pattern to prevent storage collisions. The correct implementation should include the & ~bytes32(uint256(0xff)) mask.
+
+The storage slot calculation is vulnerable to collisions due to the improper ERC-7201 implementation. 
+
+```solidity
+function load(address asset) internal pure returns (Data storage assetSwapPath) {
+    bytes32 slot = keccak256(abi.encode(ASSET_SWAP_STRATEGY_LOCATION, asset));
+    assembly {
+        assetSwapPath.slot := slot
+    }
+}
+```
+Without this mask, multiple contracts that use similar namespace derivations may overwrite each other’s storage, leading to unintended data corruption.
+
+Impact
+ Due to improper ERC-7201 implementation, different assets could map to the same storage slot
+
+If the namespace mask is not applied, multiple contracts may unintentionally overwrite each other’s storage.
+
+Data from one contract may be mistakenly read or modified by another contract using a conflicting storage slot.
+
+Tools Used
+Manual
+
+Recommendations
+```solidity
+bytes32 internal constant ASSET_SWAP_STRATEGY_LOCATION =
+    keccak256(abi.encode(uint256(keccak256("fi.zaros.market-making.AssetSwapPath")) - 1)) & ~bytes32(uint256(0xff));
+```
+Referances:
+
+Correcting the Storage Namespace Calculation
+
+Ensures compliance with ERC-7201 by applying the required namespace mask.
+
+Prevents potential storage collisions across different contracts using ERC-7201.
+
+Implementing this fix, will fully align with ERC-7201, reducing the risk of storage conflicts and improving reliability.
