@@ -13,5 +13,8 @@
 #### Book a meeting:
 [Calendly](https://calendly.com/obingo76/30min)
 
+#### Catch Bugs Before They Catch You:
+[Catch Bugs Before They Catch You](https://open.substack.com/pub/obingo77/p/smart-contract-property-testing?r=3mc0ih&utm_campaign=post&utm_medium=web&showWelcomeOnShare=false)
+
 ## About me
 I audit smart contracts written in Solidity and specialize in fuzzing and invariant testing to uncover hard to find bugs.
